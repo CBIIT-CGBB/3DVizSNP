@@ -626,6 +626,7 @@ def cli():
                 - a .csv file that can be imported into Numbers or Google Sheets (URLs are broken in Excel)
             '''
     def check_max(n):
+        n = int(n)
         # restrict output lines to 10,000
         if (n > 10000):
             msg = "%r cannot be larger than 10,000, resetting value to 10,000." % n
