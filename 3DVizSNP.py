@@ -101,9 +101,11 @@ def get_protein_id(gene, rest):
 
     return SwissProt_ID
 
-def vep_output(variants, args):
+def vep_output(args, variants, colnames):
     """ Run VEP with the identified variants and capture sift and polyphen scores"""
     
+    global results
+
     species = args.s
     print("species:", species)
     server = "https://rest.ensembl.org"
@@ -167,8 +169,8 @@ def vep_output(variants, args):
       },
     '''
 
-    colnames = ["variant", "EnsID", "SPID", "PDBID", "mutaa", "SIpred", "SIscore", "PPpred", "PPscore"]
-    results = pd.DataFrame(columns=colnames)
+    vep_results = pd.DataFrame(columns=colnames)
+    
     for i in decoded:
         var = i.get("input")
         #print("input:", var, "\n")
@@ -207,12 +209,13 @@ def vep_output(variants, args):
                                             'PPscore': j.get("polyphen_score", -1.0)})
 
                             #print("var:", var, "mutaa:", mutaa)
-                            results = pd.concat([results, row.to_frame().T])
+                            vep_results = pd.concat([vep_results, row.to_frame().T])
 
                             break # just take the first hit (avoid isoforms)
-    results.set_index('variant', inplace=True)
+    vep_results.set_index('variant', inplace=True)
+    print(vep_results)
 
-    return(results)
+    return(vep_results)
 
 def get_pdb_id(results):
     '''
@@ -474,18 +477,6 @@ def print_html(args, url_list, results):
         else:
             url = url1 # text output, no link
 
-        print('n:', type(n))
-        print('row.Index:', type(row.Index))
-        print('row.EnsID:', type(row.EnsID))
-        print('row.SPID:', type(row.SPID))
-        print('row.PDBID:', type(row.PDBID))
-        print('row.mutaa:', type(row.mutaa))
-        print('row.SIpred:', type(row.SIpred))
-        print('row.SIscore:', type(row.SIscore))
-        print('row.PPpred:', type(row.PPpred))
-        print('row.PPscore:', type(row.PPscore))
-        print('url:', type(url))
-
         html += "<tr><td>" + str(n) + "</td><td>" + str(row.Index) + "</td><td>" + row.EnsID + "</td><td>" \
             + row.SPID + "</td><td>" + row.PDBID + "</td><td>" + row.mutaa + "</td><td>" \
             + row.SIpred + "</td><td>" + str(row.SIscore) + "</td><td>" \
@@ -503,7 +494,7 @@ def print_csv(args, url_list, results):
     print the results dataframe in a .csv file
     '''
     fout = args.v + "_results.csv"
-
+    
     for index,row in results.iterrows():
 
         url = ''
@@ -519,11 +510,17 @@ def print_csv(args, url_list, results):
             url = url1 # text output, no link
         results.loc[index, 'Link'] = url
     
-    csv_header = ['Variant', 'EnsemblID', 'UniprotID', 'PDBID', 'AminoAcidMutation', 
+    results_csv = results.copy()
+    print(results_csv)                    
+
+    results_csv.reset_index(inplace=True)
+    print(results_csv)
+
+    csv_header = ['EnsemblID', 'UniprotID', 'PDBID', 'AminoAcidMutation', 
                   'SiftPrediction', 'SiftScore',
                   'PolyPhenPrediction', 'PolyPhenScore', 'iCn3Dlink']
 
-    results.to_csv(fout, header=csv_header) # index_label='Variant',header=csv_header
+    results.to_csv(fout,  header=csv_header) # index=False, index_label='Variant',header=csv_header
 
 def get_vcf(args):
     '''
@@ -548,7 +545,7 @@ def get_vcf(args):
 
     return(vcf)
 
-def get_vcf_tcga(args):
+def get_vcf_tcga(args, colnames):
     ''' 
     Get Ensembl ID, SwissProt ID, SIFT, Polyphen predictions & scores directly from TCGA VCF file
     Note: not recommended, there are lots of discrepancies between TCGA values & VEP/Ensembl REST values
@@ -557,8 +554,7 @@ def get_vcf_tcga(args):
     # read in the VCF file
     vcf = []
     vcf_reader = VariantFile(args.v)
-    colnames = ["variant", "EnsID", "SPID", "PDBID", "mutaa", "SIpred", "SIscore", "PPpred", "PPscore"]
-    results = pd.DataFrame(columns=colnames)
+    tcga_results = pd.DataFrame(columns=colnames)
 
     for record in vcf_reader.fetch():
         line = str(record)
@@ -609,15 +605,15 @@ def get_vcf_tcga(args):
                                     'SIscore': float(sift_split[2]),
                                     'PPpred': polyph_split[1],
                                     'PPscore': float(polyph_split[2])})
-                    results = pd.concat([results, row.to_frame().T])
+                    tcga_results = pd.concat([tcga_results, row.to_frame().T])
 
             if len(vcf) == args.n:
                 print("Stopping after", str(args.n), "variants...")
                 break
 
-    results.set_index('variant', inplace=True)
+    tcga_results.set_index('variant', inplace=True)
 
-    return(vcf, results)
+    return(vcf, tcga_results)
 
 def cli():
 
@@ -720,12 +716,13 @@ def main(args):
 
     colnames = ["variant", "EnsID", "SPID", "PDBID", "mutaa", "SIpred", "SIscore", "PPpred", "PPscore"]
     results = pd.DataFrame(columns=colnames)
+    results.set_index('variant', inplace=True)
 
     # Extract SIFT & PolyPhen scores from TCGA file
     if args.t:
         print("Getting VEP values from TCGA file...")
-        vcf, results = get_vcf_tcga(args) # returns vcf, gene_ids dict, fills sift & polyphen
-        get_pdb_id(results) 
+        vcf, results = get_vcf_tcga(args, colnames) # returns vcf, gene_ids dict, fills sift & polyphen
+        get_pdb_id() 
 
     # Get variants from VCF file, SIFT & PolyPhen from VEP REST API (default)
     else:    
@@ -750,11 +747,11 @@ def main(args):
                 loc = " ".join(c) 
                 variants += "\"" + loc + "\" ," 
             variants = variants[:-1]
-            vep_result = vep_output(variants, args)
+            vep_result = vep_output(args, variants, colnames)
             results = pd.concat([results, vep_result])
-            time.sleep(2)
+            time.sleep(2) # avoid taxing server
         print("Done")
-            
+    
         # find if mutations are in PDB structures or not
         print("\nGetting PDB IDs...", end='')
         get_pdb_id(results)
@@ -768,8 +765,7 @@ def main(args):
 
     for gene in gene_id_list:
         print("=========================\nGetting link for ", gene)
-
-        gene_res = results[results['EnsID'] == gene]
+        gene_res = results[results['EnsID'] == gene] # just submit the results for a given EnsID
         url_list[gene] = get_iCn3D_path(gene_res)
 
     # generate an html page with results dataframe, iCn3D links
