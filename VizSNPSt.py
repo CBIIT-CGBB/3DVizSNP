@@ -393,7 +393,7 @@ def get_iCn3D_path(gene_res):
                 if (row.PPpred == 'probably_damaging'):
                     poly_str += ',' +  s[1] + ' ' + s[2]
                     if sift == 0: # avoid repeating scap
-                        scap_str += ',' + structid + '_' + str(pdb_mutaa_num) + "_" + p[2]
+                        scap_str += ',' + structid + '_' + str(pdb_mutaa_num) + "_" + s[2]
 
         if scap_str != '':
             sift_str = sift_str.lstrip(',')

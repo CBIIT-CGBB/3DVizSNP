@@ -201,10 +201,10 @@ def vep_output(variants, args):
                                             'SPID': sp,
                                             'PDBID': '',
                                             'mutaa': mutaa,
-                                            'SIpred': j.get("sift_prediction"),
-                                            'SIscore': j["sift_score"],
-                                            'PPpred': j.get("polyphen_prediction"),
-                                            'PPscore': j["polyphen_score"]})
+                                            'SIpred': j.get("sift_prediction", "NA"),
+                                            'SIscore': j.get("sift_score", 99.9),
+                                            'PPpred': j.get("polyphen_prediction", "NA"),
+                                            'PPscore': j.get("polyphen_score", -1.0)})
 
                             #print("var:", var, "mutaa:", mutaa)
                             results = pd.concat([results, row.to_frame().T])
@@ -395,7 +395,7 @@ def get_iCn3D_path(gene_res):
                 if (row.PPpred == 'probably_damaging'):
                     poly_str += ',' +  s[1] + ' ' + s[2]
                     if sift == 0: # avoid repeating scap
-                        scap_str += ',' + structid + '_' + str(pdb_mutaa_num) + "_" + p[2]
+                        scap_str += ',' + structid + '_' + str(pdb_mutaa_num) + "_" + s[2]
 
         if scap_str != '':
             sift_str = sift_str.lstrip(',')
@@ -474,6 +474,18 @@ def print_html(args, url_list, results):
         else:
             url = url1 # text output, no link
 
+        print('n:', type(n))
+        print('row.Index:', type(row.Index))
+        print('row.EnsID:', type(row.EnsID))
+        print('row.SPID:', type(row.SPID))
+        print('row.PDBID:', type(row.PDBID))
+        print('row.mutaa:', type(row.mutaa))
+        print('row.SIpred:', type(row.SIpred))
+        print('row.SIscore:', type(row.SIscore))
+        print('row.PPpred:', type(row.PPpred))
+        print('row.PPscore:', type(row.PPscore))
+        print('url:', type(url))
+
         html += "<tr><td>" + str(n) + "</td><td>" + str(row.Index) + "</td><td>" + row.EnsID + "</td><td>" \
             + row.SPID + "</td><td>" + row.PDBID + "</td><td>" + row.mutaa + "</td><td>" \
             + row.SIpred + "</td><td>" + str(row.SIscore) + "</td><td>" \
@@ -491,6 +503,7 @@ def print_csv(args, url_list, results):
     print the results dataframe in a .csv file
     '''
     fout = args.v + "_results.csv"
+
     for index,row in results.iterrows():
 
         url = ''
@@ -506,7 +519,11 @@ def print_csv(args, url_list, results):
             url = url1 # text output, no link
         results.loc[index, 'Link'] = url
     
-    results.to_csv(fout)
+    csv_header = ['Variant', 'EnsemblID', 'UniprotID', 'PDBID', 'AminoAcidMutation', 
+                  'SiftPrediction', 'SiftScore',
+                  'PolyPhenPrediction', 'PolyPhenScore', 'iCn3Dlink']
+
+    results.to_csv(fout, header=csv_header) # index_label='Variant',header=csv_header
 
 def get_vcf(args):
     '''
