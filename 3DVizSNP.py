@@ -10,9 +10,7 @@ Modifications by: Michael Sierk, NCI
                   Manoj M Wagle, Université Grenoble Alpes; University of Sydney
 
 TODO (3/13/23):
-    - add cli variable for number of rows in output table (default 1000)
-    - separate SIFT/PolyPhen classifications and scores in table
-    - add cli variable for species
+    - make requests verify=False a cli flag
     - fix links so only 1 mutation per link (?)
     - add option to submit HUGO gene names instead of Ensembl IDs
     - option to include SIFT/Polyphen score cutoff
@@ -28,15 +26,14 @@ import sys
 import re
 import re
 from pysam import VariantFile
-import requests
-import json
+import requests # verify=False set in requests to avoid errors when on VPN
+requests.packages.urllib3.disable_warnings() # removes InsecureRequestWarning due to verify=False being set
+#import json
 import time
 from datetime import datetime
-from urllib.parse import quote, urlencode
-from urllib.request import urlopen, Request
-from urllib.error import HTTPError
+from urllib.parse import quote 
+from urllib.request import urlopen 
 import pandas as pd
-from math import nan
 
 
     
@@ -58,19 +55,19 @@ def get_protein_id(gene, rest):
             'ids': gene
         }
 
-        response = requests.post(f'{URL}/run', params)
+        response = requests.post(f'{URL}/run', params, verify=False)
         #print(response)
 
         job_id = response.json()['jobId']
         #print('job id:', job_id)
-        job_status = requests.get(f'{URL}/status/{job_id}')
+        job_status = requests.get(f'{URL}/status/{job_id}', verify=False)
         d = job_status.json()
 
         # Make three attemps to get the results
         for i in range(3):
             #print(d.get('jobStatus'))
             if d.get("jobStatus") == 'FINISHED' or d.get('results'):
-                job_results = requests.get(f'{URL}/results/{job_id}')
+                job_results = requests.get(f'{URL}/results/{job_id}', verify=False)
                 results = job_results.json()
                 #print(json.dumps(results, indent=2))
                 for obj in results['results']:
@@ -116,7 +113,7 @@ def vep_output(args, variants, colnames):
     vcf_lines = "{\"variants\" : [" + variants + "]}"
     #print(vcf_lines)
 
-    r = requests.post(server + ext, headers=headers, data=vcf_lines) 
+    r = requests.post(server + ext, headers=headers, data=vcf_lines, verify=False) 
     if not r.ok:
         r.raise_for_status()
         sys.exit()
@@ -180,6 +177,7 @@ def vep_output(args, variants, colnames):
                     # Note: retrieve all predictions, not just deleterious
                     if "sift_prediction" in j or "polyphen_prediction" in j:
                         gene_id = j.get("gene_id")
+                        gene_sym = j.get("gene_symbol")
 
                         if "swissprot" in j:
                             sp = j.get("swissprot")[0].split('.')[0]
@@ -200,6 +198,7 @@ def vep_output(args, variants, colnames):
 
                             row = pd.Series({'variant': var,
                                             'EnsID': gene_id,
+                                            'Symbol': gene_sym,
                                             'SPID': sp,
                                             'PDBID': '',
                                             'mutaa': mutaa,
@@ -213,7 +212,7 @@ def vep_output(args, variants, colnames):
 
                             break # just take the first hit (avoid isoforms)
     vep_results.set_index('variant', inplace=True)
-    print(vep_results)
+    #print(vep_results)
 
     return(vep_results)
 
@@ -228,9 +227,9 @@ def get_pdb_id(results):
     spid_list = list(set(results.SPID)) # unique set of SwissProt ids
 
     for spid in spid_list:
-        print("spid:", spid)
+        #print("spid:", spid)
         url = "https://www.ebi.ac.uk/pdbe/graph-api/mappings/best_structures/" + spid 
-        r = requests.get(url)
+        r = requests.get(url, verify=False)
         #print(r.json())
         if r.status_code == 200:
             pdbid_list = r.json()
@@ -281,148 +280,102 @@ def variant_string(mut_list):
  
     return variant_str
 
-def get_iCn3D_path(gene_res):
+def get_iCn3D_path(results):
     '''
     generates the iCn3D path(s) based on the variants for a given gene
     TODO: need to modify to produce BED file to show SIFT/Polyphen score
-    need a separate URL for each PDB/AFID
+    
+    Currently generates a separate URL for each PDB/AFID, but probably need
+    to go back to a single URL for each mutation, as it is confusing when opening
+    multiple mutations at a time in iCn3D
     '''
     
     date = datetime.now()
     url_path='https://www.ncbi.nlm.nih.gov/Structure/icn3d/full.html?'
 
-    url_list = dict()
+    for row in results.itertuples():
+        print("\nGetting URL for", row.SPID)
+        iCn3Durl = "No structure for " + row.SPID
 
-    spid = gene_res.SPID.unique().tolist()[0] # should be only 1 swissprotID per gene
-    print("SwissProt ID:", spid)
-    sift_str = ''
-    poly_str = ''
-    scap_str = ''
-
-    afid = 0
-    url_list[spid] = "No deleterious mutations found for " + spid
-    # check to see if we are using AlphaFold structure
-    for row in gene_res.itertuples():
-        if (row.PDBID == ''):
-            # check length -> sequences > 2700 aa are not in AF predictions
-            length_query = "https://rest.uniprot.org/uniprotkb/" + row.SPID + "?format=tsv&fields=length"
-            r = requests.get(length_query).text
-            if int(r.split()[1]) > 2700:
-                print(row.SPID)
-                print("length > 2700, no AF prediction")
-                continue
-            if ((row.SIpred == 'deleterious') | (row.PPpred == 'probably_damaging')):
-                afid = 1
-    
-    # all mutations in the alphafold structure in the same URL
-    if afid == 1:
-        print("Getting alphafold url...")
-        for row in gene_res.itertuples():
-            mutaa = row.mutaa
-            sift = 0
-            # check if any deleterious mutations
-            if (row.SIpred == 'deleterious'):
-                s = re.split(r'(\d+)', mutaa) # need the number and new aa
-                sift_str += ',' +  s[1] + ' ' + s[2]
-                scap_str += ',' + spid + '_A' + '_' + s[1] + "_" + s[2] # e.g. P16860_A_113_Y
-                sift = 1
-            if (row.PPpred == 'probably_damaging'):
-                p = re.split(r'(\d+)', mutaa) 
-                poly_str += ',' +  p[1] + ' ' + p[2]
-                if sift == 0: # avoid repeating scap
-                    scap_str += ',' + spid + '_A' + '_' + p[1] + "_" + p[2]
-
-        if scap_str != '': 
-            sift_str = sift_str.lstrip(',')
-            poly_str = poly_str.lstrip(',')
-            scap_str = scap_str.lstrip(',')
-            
-            url_query =  'afid=' + spid + '&date=' + date.strftime("%Y%m%d") + '&v=3.12.7&command='
-            url_command = 'view annotations; set annotation cdd; set view detailed view;  set thickness | stickrad 0.2'    
-            url_command += '; add track | chainid ' + spid + '_A' + ' | title SIFT_predict | text ' + sift_str
-            url_command += '; add track | chainid ' + spid + '_A' + ' | title PolyPhen_predict | text ' + poly_str
-            url_command += '; scap interaction ' + scap_str
-
-            iCn3Durl = url_path + url_query + url_command
-            url_command = quote(url_command) # encode the spaces for URL
-            iCn3Durl = url_path + url_query + url_command
-            url_list[spid] = iCn3Durl
-
-    # go through the PDB IDs
-    print('getting PDB urls...')
-    for structid in gene_res.PDBID.unique().tolist():
-        if structid == '':
-            continue
-        #print('structid:', structid)
         sift_str = ''
         poly_str = ''
         scap_str = ''
         url_query = ''
         url_command = ''
-        iCn3Durl = ''
-        # have to check for offset between Uniprot -> PDB residue number mapping
-        pdb = structid.split("_")[0]
-        chainid = structid.split("_")[1]
-        url = "https://www.ebi.ac.uk/pdbe/api/mappings/uniprot_segments/" + pdb
-        r = requests.get(url)
-        if r.status_code == 200:
-            uniprot_map = r.json()
+
+        mutaa = row.mutaa
+        s = re.split(r'(\d+)', mutaa)  # need the number and new aa
+
+        if row.SIpred != '':
+            sift_str += s[1] + ' ' + s[2]
+
+        if row.PPpred != '':
+            poly_str += s[1] + ' ' + s[2]
+
+        # check to see if we are using AlphaFold structure
+        if (row.PDBID == ''):
+            # check length -> sequences > 2700 aa are not in AF predictions
+            length_query = "https://rest.uniprot.org/uniprotkb/" + row.SPID + "?format=tsv&fields=length"
+            r = requests.get(length_query, verify=False).text
+            if int(r.split()[1]) > 2700:
+                print(row.SPID)
+                print("length > 2700, no AF prediction")
+                continue
+            else:
+                print("Getting alphafold url...")
+                scap_str += row.SPID + '_A' + '_' + s[1] + "_" + s[2]  # e.g. P16860_A_113_Y
+            
+                url_query =  'afid=' + row.SPID + '&date=' + date.strftime("%Y%m%d") + '&v=3.12.7&command='
+                
+                url_command = 'view annotations; set annotation cdd; set view detailed view;  set thickness | stickrad 0.2'    
+                url_command += '; add track | chainid ' + row.SPID + '_A' + ' | title SIFT_predict | text ' + sift_str
+                url_command += '; add track | chainid ' + row.SPID + '_A' + ' | title PolyPhen_predict | text ' + poly_str
+                url_command += '; scap interaction ' + scap_str
+
         else:
-            uniprot_map = "None"
+            print('getting PDB url...')
+
+            # have to check for offset between Uniprot -> PDB residue number mapping
+            pdb = row.PDBID.split("_")[0]
+            chainid = row.PDBID.split("_")[1]
+            pdb_url = "https://www.ebi.ac.uk/pdbe/api/mappings/uniprot_segments/" + pdb
+            r = requests.get(pdb_url, verify=False)
+            if r.status_code == 200:
+                uniprot_map = r.json()
+            else:
+                uniprot_map = "None"
         
-        for id in uniprot_map:
-            if id.upper() == pdb:
-                mappings = uniprot_map[id]["UniProt"][spid]["mappings"]
-                if mappings[0]['chain_id'] == chainid:
-                    pdb_start_num = mappings[0]['start']['author_residue_number']
-                    uniprot_start_num = mappings[0]['unp_start']
+            for id in uniprot_map:
+                if id.upper() == pdb:
+                    mappings = uniprot_map[id]["UniProt"][row.SPID]["mappings"]
+                    if mappings[0]['chain_id'] == chainid:
+                        pdb_start_num = mappings[0]['start']['author_residue_number']
+                        uniprot_start_num = mappings[0]['unp_start']
         
-        if pdb_start_num != None:
-            diff = uniprot_start_num - int(pdb_start_num)
-        else:
             diff = 0
+            if pdb_start_num != None:
+                diff = uniprot_start_num - int(pdb_start_num)
 
-        # put all mutations for a given PDB in same url
-        for row in gene_res.itertuples():
-            mutaa = row.mutaa
-            s = re.split(r'(\d+)', mutaa) # need the number and new aa
             pdb_mutaa_num = int(s[1]) - diff # correct for uniprot->pdb offset 
-            pdbid = row.PDBID
-            sift = 0
-            if pdbid == structid:
-                # check if any deleterious mutations
-                if (row.SIpred == 'deleterious'):
-                    sift_str += ',' +  s[1] + ' ' + s[2]
-                    scap_str += ',' + structid + '_' + str(pdb_mutaa_num) + "_" + s[2] # e.g. 1HLZ_A_113_Y
-                    sift = 1
-                if (row.PPpred == 'probably_damaging'):
-                    poly_str += ',' +  s[1] + ' ' + s[2]
-                    if sift == 0: # avoid repeating scap
-                        scap_str += ',' + structid + '_' + str(pdb_mutaa_num) + "_" + s[2]
+            scap_str += row.PDBID + "_" + str(pdb_mutaa_num) + "_" + s[2] # e.g. 1HLZ_A_113_Y
 
-        if scap_str != '':
-            sift_str = sift_str.lstrip(',')
-            poly_str = poly_str.lstrip(',')
-            scap_str = scap_str.lstrip(',')
-            url_query =  'pdbid=' + structid.split("_")[0] + '&date=' + date.strftime("%Y%m%d") + '&v=3.12.7&command='
+            url_query =  'pdbid=' + row.PDBID.split("_")[0] + '&date=' + date.strftime("%Y%m%d") + '&v=3.12.7&command='
+
             url_command = 'view annotations; set annotation cdd; set view detailed view;  set thickness | stickrad 0.2'    
-            url_command += '; add track | chainid ' + structid + ' | title SIFT_predict | text ' + sift_str
-            url_command += '; add track | chainid ' + structid + ' | title PolyPhen_predict | text ' + poly_str
+            url_command += '; add track | chainid ' + row.PDBID + ' | title SIFT_predict | text ' + sift_str
+            url_command += '; add track | chainid ' + row.PDBID + ' | title PolyPhen_predict | text ' + poly_str
             url_command += '; scap interaction ' + scap_str
 
-            iCn3Durl = url_path + url_query + url_command
-            url_command = quote(url_command) # encode the spaces for URL
-            iCn3Durl = url_path + url_query + url_command
-            url_list[structid] = iCn3Durl 
-        else:
-            url_list[structid] = "No deleterious mutations found for " + structid
-    
-    return(url_list) 
+        url_command = quote(url_command) # encode the spaces for URL
+        iCn3Durl = url_path + url_query + url_command
 
-def print_html(args, url_list, results):
+        results.loc[row.Index,'Link'] = iCn3Durl
+
+def print_html(args, results):
     '''
     Write out the results dataframe to an HTML file with iCn3D links
     '''
+
     fout = args.v + "_output.html"
     f = open(fout, 'w')
   
@@ -455,32 +408,59 @@ def print_html(args, url_list, results):
         html += "SIFT & PolyPhen scores taken from TCGA VCF file.<br>"
 
     # output table
-    html += "<tr><th>#</th><th>Variant</th><th>Gene</th><th>UniprotID</th><th>PDB ID</th>\
+    html += "<tr><th>#</th><th>Variant</th><th>GeneID</th><th>Symbol</th><th>UniprotID</th><th>PDB ID</th>\
              <th>mutaa</th><th>SIFT Call</th><th>SIFT Score</th><th>PolyPhen Call</th><th>PolyPhen Score</th>\
              <th>iCn3D link</th></tr>"
+    
     n = 0
     for row in results.itertuples():
-       # limit output to 1000 rows by default
+
+        # limit output to 1000 rows by default
         n += 1
         if n > args.n:
             print("HTML output limited to", str(args.n), "rows...")
             break
-        url = ''
-        if row.PDBID == '':
-            url1 = url_list[row.EnsID][row.SPID]
-        else:
-            url1 = url_list[row.EnsID][row.PDBID]
 
-        # URL is repeated for same PDB/Alphafold ID
-        if re.match(r"^https", url1):
-            url = "<a href=" + ''.join(url1) + " target=\"_blank\">iCn3D link</a><br>"
-        else:
-            url = url1 # text output, no link
+        iCn3Durl = "<a href=" + str(row.Link) + " target=\"_blank\">iCn3D link</a><br>"
 
-        html += "<tr><td>" + str(n) + "</td><td>" + str(row.Index) + "</td><td>" + row.EnsID + "</td><td>" \
-            + row.SPID + "</td><td>" + row.PDBID + "</td><td>" + row.mutaa + "</td><td>" \
-            + row.SIpred + "</td><td>" + str(row.SIscore) + "</td><td>" \
-            + row.PPpred + "</td><td>" + str(row.PPscore) + "</td><td>" + url + "</td></tr>"
+        # put in link for EnsID, SPID, PDBID
+        # EnsID: https://useast.ensembl.org/Homo_sapiens/Gene/Summary?g=ENSG00000187634
+        # SPID: https://www.uniprot.org/uniprotkb/Q5T0D9
+        # PDBID: https://www.rcsb.org/structure/1HLZ
+        ensid_url = "https://useast.ensembl.org/Homo_sapiens/Gene/Summary?g=" + row.EnsID
+        ensid_link = "<a href=" + ensid_url + " target=\"_blank\">" + row.EnsID + "</a><br>"
+
+        if row.SPID != '':
+            spid_url = "https://www.uniprot.org/uniprotkb/" + row.SPID
+            spid_link = "<a href=" + spid_url + " target=\"_blank\">" + row.SPID + "</a><br>"
+        else:
+            spid_link = row.SPID
+
+        if row.PDBID != '':
+            pdbid_url = "https://www.rcsb.org/structure/" + row.PDBID.split("_")[0]
+            pdbid_link = "<a href=" + pdbid_url + " target=\"_blank\">" + row.PDBID + "</a><br>"
+        else:
+            pdbid_link = row.PDBID 
+
+        # highlight deleterious mutations with color text
+        SIpred_td = "<td>" + row.SIpred + "</td>"
+        if row.SIpred == 'deleterious':
+            SIpred_td = "<td style=\"color:red\">" + row.SIpred + "</td>"
+        elif row.SIpred == 'deleterious_low_confidence':
+            SIpred_td = "<td style=\"color:orange\">" + row.SIpred + "</td>"
+
+        PPpred_td = "<td>" + row.PPpred + "</td>"
+        if row.PPpred == 'probably_damaging':
+            PPpred_td = "<td style=\"color:red\">" + row.PPpred + "</td>"
+        elif row.PPpred == 'possibly_damaging':
+            PPpred_td = "<td style=\"color:orange\">" + row.PPpred + "</td>"
+
+        html += "<tr><td>" + str(n) + "</td><td>" + str(row.Index) + "</td><td>" \
+            + ensid_link + "</td><td>" + row.Symbol + "</td><td>" + spid_link + "</td><td>" \
+            + pdbid_link + "</td><td>" + row.mutaa + "</td>" \
+            + SIpred_td + "<td>" + str(row.SIscore) + "</td>" \
+            + PPpred_td + "<td>" + str(row.PPscore) + "</td><td>" \
+            + iCn3Durl + "</td></tr>\n"
 
     html += "</table>"
     html += "</body>"
@@ -489,38 +469,46 @@ def print_html(args, url_list, results):
     f.write(html)
     f.close()
     
-def print_csv(args, url_list, results):
+def print_csv(args, results):
     '''
     print the results dataframe in a .csv file
     '''
     fout = args.v + "_results.csv"
     
-    for index,row in results.iterrows():
-
-        url = ''
-        if row.PDBID == '':
-            url1 = url_list[row.EnsID][row.SPID]
-        else:
-            url1 = url_list[row.EnsID][row.PDBID]
-        
-        # URL is repeated for same PDB/Alphafold ID
-        if re.match(r"^https", url1):
-            url = '=HYPERLINK("' + url1 + '","iCn3D link")'
-        else:
-            url = url1 # text output, no link
-        results.loc[index, 'Link'] = url
-    
+    # put in link for EnsID, SPID, PDBID
+    # EnsID: https://useast.ensembl.org/Homo_sapiens/Gene/Summary?g=ENSG00000187634
+    # SPID: https://www.uniprot.org/uniprotkb/Q5T0D9
+    # PDBID: https://www.rcsb.org/structure/1HLZ
     results_csv = results.copy()
-    print(results_csv)                    
+
+    for row in results_csv.itertuples():
+
+        ensid_link = '=HYPERLINK("https://useast.ensembl.org/Homo_sapiens/Gene/Summary?g=' + row.EnsID + '","' + row.EnsID + '")' 
+
+        if row.SPID != '':
+            spid_link = '=HYPERLINK("https://www.uniprot.org/uniprotkb/' + row.SPID + '","' + row.SPID + '")' 
+        else:
+            spid_link = row.SPID
+
+        if row.PDBID != '':
+            pdbid_link = '=HYPERLINK("https://www.rcsb.org/structure/' + row.PDBID + '","' + row.PDBID + '")' 
+        else:
+            pdbid_link = row.PDBID 
+    
+        iCn3Dlink = '=HYPERLINK("' + row.Link + '","iCn3D Link")'
+
+        results_csv.loc[row.Index,'EnsID'] = ensid_link
+        results_csv.loc[row.Index,'SPID'] = spid_link
+        results_csv.loc[row.Index,'PDBID'] = pdbid_link
+        results_csv.loc[row.Index,'Link'] = iCn3Dlink
 
     results_csv.reset_index(inplace=True)
-    print(results_csv)
 
-    csv_header = ['EnsemblID', 'UniprotID', 'PDBID', 'AminoAcidMutation', 
+    csv_header = ['Variant', 'EnsemblID', 'Symbol', 'UniprotID', 'PDBID', 'AminoAcidMutation', 
                   'SiftPrediction', 'SiftScore',
                   'PolyPhenPrediction', 'PolyPhenScore', 'iCn3Dlink']
 
-    results.to_csv(fout,  header=csv_header) # index=False, index_label='Variant',header=csv_header
+    results_csv.to_csv(fout,  header=csv_header) # index=False, index_label='Variant',header=csv_header
 
 def get_vcf(args):
     '''
@@ -538,7 +526,6 @@ def get_vcf(args):
             vcf_line[0] = vcf_line[0].replace("chr","") # can't have chr in VEP REST API submission
             vcf.append(vcf_line[0:6])
 
-            # can make limit a command-line argument
             if len(vcf) == args.n:
                 print("Stopping after", str(args.n), "variants out of", n, "vcf lines)")
                 break
@@ -598,6 +585,7 @@ def get_vcf_tcga(args, colnames):
 
                     row = pd.Series({'variant': variant,
                                     'EnsID': e[4],
+                                    'Symbol': e[3],
                                     'SPID': spid,
                                     'PDBID': '',
                                     'mutaa': mutaa,
@@ -714,7 +702,8 @@ def main(args):
      Coord EnsGene SPid PDBID mutaa SIFT Polyphen iCn3Dlink
     '''
 
-    colnames = ["variant", "EnsID", "SPID", "PDBID", "mutaa", "SIpred", "SIscore", "PPpred", "PPscore"]
+    colnames = ["variant", "EnsID", "Symbol", "SPID", "PDBID", "mutaa", 
+                "SIpred", "SIscore", "PPpred", "PPscore", "Link"]
     results = pd.DataFrame(columns=colnames)
     results.set_index('variant', inplace=True)
 
@@ -722,7 +711,11 @@ def main(args):
     if args.t:
         print("Getting VEP values from TCGA file...")
         vcf, results = get_vcf_tcga(args, colnames) # returns vcf, gene_ids dict, fills sift & polyphen
-        get_pdb_id() 
+        
+        # find if mutations are in PDB structures or not
+        print("\nGetting PDB IDs...", end='')
+        get_pdb_id(results)
+        print("Done") 
 
     # Get variants from VCF file, SIFT & PolyPhen from VEP REST API (default)
     else:    
@@ -760,21 +753,22 @@ def main(args):
     # end if args.t
 
     print("\nGenerating iCn3D URLs...")
-    url_list = defaultdict(dict)
-    gene_id_list = list(set(results.EnsID)) # unique set of gene ids
+    #url_list = defaultdict(dict)
+    #gene_id_list = list(set(results.EnsID)) # unique set of gene ids
 
-    for gene in gene_id_list:
-        print("=========================\nGetting link for ", gene)
-        gene_res = results[results['EnsID'] == gene] # just submit the results for a given EnsID
-        url_list[gene] = get_iCn3D_path(gene_res)
+    #for gene in gene_id_list:
+    #    print("=========================\nGetting link for ", gene)
+    #    gene_res = results[results['EnsID'] == gene] # just submit the results for a given EnsID
+    #    url_list[gene] = get_iCn3D_path(gene_res)
+    get_iCn3D_path(results)
 
     # generate an html page with results dataframe, iCn3D links
     print("\nPrinting html file...")
-    print_html(args, url_list, results)
+    print_html(args, results) # url_list, 
 
     # generate a .csv file with results dataframe, iCn3D links
     print("Printing .csv file...")
-    print_csv(args, url_list, results)
+    print_csv(args, results) # url_list, 
 
 if __name__ == '__main__':   
     main(cli().parse_args())   
