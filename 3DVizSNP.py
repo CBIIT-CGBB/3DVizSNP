@@ -242,7 +242,6 @@ def get_pdb_id(results):
                 #print("aa:", aa)
                 aanum = aa[1:-1] 
                 for m in pdbid_list:
-                    #print('pdbid:', m)
                     maxres = 10
                     for j in pdbid_list[m]:
                         #print(aanum)
