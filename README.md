@@ -1,8 +1,7 @@
 ***
 
-<p align = "center">
-  <img src="https://user-images.githubusercontent.com/74168582/226161358-f8d453b0-8f23-4916-a334-b162e1b519e8.png" width="700" height="500">
-</p>
+<img width="666" alt="Logo" src="https://github.com/CBIIT-CGBB/3DVizSNP/assets/56087985/83be1453-ce64-42dc-accb-d06a0c95bcf3">
+
 
 ***
 
