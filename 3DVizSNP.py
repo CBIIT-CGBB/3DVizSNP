@@ -160,9 +160,11 @@ def vep_output(variants, colnames):
 
     vep_results = pd.DataFrame(columns=colnames)
     
+    cnt = 0
     for i in decoded:
+
         var = i.get("input")
-        #print("input:", var, "\n")
+
         for key in i:
             if key == "transcript_consequences":
                 for j in i[key]:
@@ -203,6 +205,7 @@ def vep_output(variants, colnames):
                             vep_results = pd.concat([vep_results, row.to_frame().T])
 
                             break # just take the first hit (avoid isoforms)
+
     vep_results.set_index('variant', inplace=True)
 
     return(vep_results)
@@ -275,16 +278,14 @@ def get_pdb_num(pdbid, spid, aanum):
                     pdb_start_num = mappings[0]['start']['author_residue_number']
                 residue_position = mappings[0]['start']['residue_number']
         
-    #diff = 0
-    #if pdb_start_num == None:
-    diff = int(uniprot_start_num) - int(pdb_start_num)
+                diff = int(uniprot_start_num) - int(pdb_start_num)
 
-    pdbnum = int(aanum) - diff 
-    #print("pdbnum:", pdbnum, "residue_num:", residue_num, "pdb_start_num:", pdb_start_num)
-    respos = int(aanum) - (uniprot_start_num - residue_position)
-    respos = int(respos)
+                pdbnum = int(aanum) - diff 
 
-    return(pdbnum, respos)
+                respos = int(aanum) - (uniprot_start_num - residue_position)
+                respos = int(respos)
+
+                return(pdbnum, respos)
 
 def check_mutant(pdbid, chainid, pdbnum):
     ''' Determine if amino acid is an engineered mutant in PDB structure
@@ -423,7 +424,7 @@ def get_iCn3D_path(results):
     url_path='https://www.ncbi.nlm.nih.gov/Structure/icn3d/full.html?'
 
     for row in results.itertuples():
-        print("\nGetting URL for", row.SPID)
+        print("\nGetting URL for", row.SPID, end='')
         iCn3Durl = "No structure for " + row.SPID
 
         sift_str = ''
@@ -441,11 +442,10 @@ def get_iCn3D_path(results):
             length_query = "https://rest.uniprot.org/uniprotkb/" + row.SPID + "?format=tsv&fields=length"
             r = requests.get(length_query, verify=verify).text
             if int(r.split()[1]) > 2700:
-                print(row.SPID)
-                print("length > 2700, no AF prediction")
+                print(row.SPID, "length > 2700, no AlphaFold prediction")
                 continue
             else:
-                print("Getting alphafold url...")
+                print(" (AlphaFold)")
                 if row.SIpred != '':
                     sift_str += s[1] + ' ' + s[2]
                 if row.PPpred != '':
@@ -461,7 +461,7 @@ def get_iCn3D_path(results):
                 url_command += '; scap interaction ' + scap_str
 
         else:
-            print('getting PDB url...')
+            print(' (PDB)')
 
             if row.SIpred != '':
                 sift_str += str(row.respos) + ' ' + s[2]
@@ -636,7 +636,7 @@ def get_vcf():
     '''
 
     vcf = []
-    n = 0
+    num_lines = 0
     vcf_reader = VariantFile(args.v)
 
     '''
@@ -698,7 +698,7 @@ def get_vcf():
             # print("display_name:", decoded[i]["display_name"])
             # print("id:", decoded[i]["id"])
             for record in vcf_reader.fetch(chr, int(start), int(stop+1)):
-                n += 1
+                num_lines += 1
                 line = str(record)
                 vcf_line = line.split()
                 # only get variants
@@ -706,23 +706,15 @@ def get_vcf():
                     vcf_line[0] = vcf_line[0].replace("chr","") # can't have chr in VEP REST API submission
                     vcf.append(vcf_line[0:6])
 
-                if len(vcf) == args.n:
-                    print("Stopping after", str(args.n), "variants (out of", n, "vcf lines)")
-                    break
-
     else:
         for record in vcf_reader.fetch():
-            n += 1
+            num_lines += 1
             line = str(record)
             vcf_line = line.split()
             # only get variants
             if (vcf_line[3] != vcf_line[4]) and (vcf_line[4] != '.'):
                 vcf_line[0] = vcf_line[0].replace("chr","") # can't have chr in VEP REST API submission
                 vcf.append(vcf_line[0:6])
-
-                if len(vcf) == args.n:
-                    print("Stopping after", str(args.n), "variants out of", n, "vcf lines)")
-                    break
 
     return(vcf)
 
@@ -788,10 +780,6 @@ def get_vcf_tcga(colnames):
                                     'PPpred': polyph_split[1],
                                     'PPscore': float(polyph_split[2])})
                     tcga_results = pd.concat([tcga_results, row.to_frame().T])
-
-            if len(vcf) == args.n:
-                print("Stopping after", str(args.n), "variants...")
-                break
 
     tcga_results.set_index('variant', inplace=True)
 
@@ -865,11 +853,35 @@ def main():
     results = pd.DataFrame(columns=colnames)
     results.set_index('variant', inplace=True)
 
+    def estimate_time(vcfdf):
+        l = len(vcfdf)
+        total_batches = l/200
+        time_per_batch = 10
+        mutations_per_batch = 12.5
+        max_batches = int(args.n/mutations_per_batch)
+
+        if total_batches > max_batches:
+            max_batches = max_batches
+        else:
+            max_batches = total_batches
+        
+        vep_time = time_per_batch * max_batches
+        pdb_time = 180 * args.n/100
+        time = vep_time + pdb_time
+        time = int(time/60 + 1)
+
+        print("\nLength of vcf file:", l)
+        print("Estimated # of batches of 200 variants needed to get to", args.n, "mutations:", str(max_batches))
+        print("Estimated time at", str(time_per_batch), "seconds per batch if", 
+              str(mutations_per_batch), "mutations per batch:", str(time), "minutes")
+
     # Extract SIFT & PolyPhen scores from TCGA file
     if args.t:
         print("Getting VEP values from TCGA file...")
         vcf, results = get_vcf_tcga(colnames) # returns vcf, gene_ids dict, fills sift & polyphen
         
+        estimate_time(vcf)
+
         # find if mutations are in PDB structures or not
         print("\nGetting PDB IDs...", end='')
         get_pdb_id(results)
@@ -880,6 +892,8 @@ def main():
         # extract the variants from the vcf file
         vcf = get_vcf()
 
+        estimate_time(vcf)
+        
         # need to break into chunks of 200 variants - maximum POST size is 200
         def divide_variants_list(list, n):
             for i in range(0, len(list), n):
@@ -899,7 +913,13 @@ def main():
                 variants += "\"" + loc + "\" ," 
             variants = variants[:-1]
             vep_result = vep_output(variants, colnames)
+
             results = pd.concat([results, vep_result])
+
+            if len(results) >= args.n:
+                print("Stopping after", str(args.n), "missense mutations...")
+                break
+
             time.sleep(2) # avoid taxing server
         print("Done")
     
