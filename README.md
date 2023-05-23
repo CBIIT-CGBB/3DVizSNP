@@ -1,6 +1,8 @@
 ***
 
-<img width="666" alt="Logo" src="https://github.com/CBIIT-CGBB/3DVizSNP/assets/56087985/83be1453-ce64-42dc-accb-d06a0c95bcf3">
+<p align="center">
+  <img width="666" alt="Logo" src="https://github.com/CBIIT-CGBB/3DVizSNP/assets/56087985/83be1453-ce64-42dc-accb-d06a0c95bcf3">
+</p>
 
 
 ***
@@ -29,7 +31,7 @@
 - You can test the script on a sample VCF file provided in the `example` directory.
 
   ```
-  python3 VizSNPSt.py -v test.vcf.gz 
+  python3 3DVizSNP.py -v test.vcf.gz 
   ```
 
 - The output HTML and .csv files are available in the `example` directory.
