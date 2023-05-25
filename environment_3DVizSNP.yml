@@ -1,0 +1,10 @@
+name: environment_3DVizSNP
+channels:
+  - defaults
+  - bioconda
+  - conda-forge
+dependencies:
+  - python=3.8  # adjust the python version based on your requirements
+  - pysam
+  - requests
+  - pandas
