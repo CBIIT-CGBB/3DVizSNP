@@ -11,6 +11,7 @@
 
 ## Table of Contents
 - [Introduction](#Introduction)
+- [Installation](#Installation)
 - [Usage](#Usage)
 - [Dependencies](#Dependencies)
 - [Acknowledgments](#Acknowledgments)
@@ -24,6 +25,23 @@
 
 - **3DVizSNP**: 3DVizSNP extracts SNPs from VCF files, submits them to the [Ensembl VEP API](https://rest.ensembl.org/#VEP), generates iCn3D links to load the mutation in either the PDB structure or the AlphaFold structure, along with a table combining the various IDs and SIFT and PolyPhen scores from VEP. It can be run locally as a python script (the [pysam](https://pysam.readthedocs.io/en/latest/installation.html) library is required) or can be accessed as a webserver at [https://analysistools.cancer.gov/3dvizsnp](https://analysistools.cancer.gov/3dvizsnp).
 
+## Installation
+3DVizSNP is developed in Python >= 3 (see the Dependencies section for more details). We have provided a conda environment file in this repository that you can use to install the required dependencies. Most other standard libraries should already be available on your system.
+
+- Step 1: Obtain 3DVizSNP on your local machine by cloning the repository.
+
+  ```
+  git clone https://github.com/CBIIT-CGBB/3DVizSNP.git 
+  ```
+
+- Step 2: Create and activate the conda environment using our provided file. After this step, you should be ready to use the 3DVizSNP tool on the command-line.
+
+  ```
+  cd 3DVizSNP
+  conda env create -f environment_3DVizSNP.yml
+  conda activate environment_3DVizSNP
+  ```
+
 ## Usage
 
 - To run the script locally you need a VCF file that is bgzipped (.gz extension) and the associated tabix index file (.tbi extension) from which the variants are to be extracted. 
@@ -31,18 +49,18 @@
 - You can test the script on a sample VCF file provided in the `example` directory.
 
   ```
-  python3 3DVizSNP.py -v test.vcf.gz 
+  python3 3DVizSNP.py -v example/test.vcf.gz 
   ```
 
-- The output HTML and .csv files are available in the `example` directory.
+- The output HTML and .csv files will be saved in the `example` directory.
 
 - Use the -h flag to see the available command-line options.
 
 ## Dependencies
 - Python version >= 3
 - Required modules:
-  * pysam (install with conda: `conda install -c bioconda pysam`)
-  * pandas, other common python packages
+  * pysam
+  * pandas, other standard python packages
 
 ## Acknowledgments
 - This project began at the [ISMB 2022 Hackathon](https://github.com/hackathonismb/VizSNP-St) sponsored by the **International Society for Computational Biology** and the **National Center for Biotechnology Information (NCBI)**.
