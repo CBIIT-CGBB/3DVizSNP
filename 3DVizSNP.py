@@ -520,7 +520,7 @@ def print_html(results):
         html += "SIFT & PolyPhen scores taken from TCGA VCF file.<br>"
 
     # output table
-    html += "<tr><th>#</th><th>Variant</th><th>GeneID</th><th>Symbol</th>\
+    html += "<tr><th>#</th><th>Variant</th><th>GeneID</th><th>Gene Symbol</th>\
              <th>UniprotID</th><th>mutaa</th>\
              <th>PDB ID</th><th>pdbnum</th>\
              <th>SIFT Call</th><th>SIFT Score</th>\
@@ -622,7 +622,7 @@ def print_csv(results):
 
     results_csv.reset_index(inplace=True)
 
-    csv_header = ['Variant', 'EnsemblID', 'Symbol', 
+    csv_header = ['Variant', 'EnsemblID', 'GeneSymbol', 
                   'UniprotID', 'AminoAcidMutation', 
                   'PDBID', 'PDBnum',  
                   'SiftPrediction', 'SiftScore',
@@ -878,9 +878,13 @@ def main():
     # Extract SIFT & PolyPhen scores from TCGA file
     if args.t:
         print("Getting VEP values from TCGA file...")
-        vcf, results = get_vcf_tcga(colnames) # returns vcf, gene_ids dict, fills sift & polyphen
+        vcf, results = get_vcf_tcga(colnames) # returns vcf, results df
         
-        estimate_time(vcf)
+        if not vcf:
+            print("No variants found in VCF file! Ending program...")
+            sys.exit()
+        else:
+            estimate_time(vcf)
 
         # find if mutations are in PDB structures or not
         print("\nGetting PDB IDs...", end='')
@@ -891,8 +895,11 @@ def main():
     else:    
         # extract the variants from the vcf file
         vcf = get_vcf()
-
-        estimate_time(vcf)
+        if not vcf:
+            print("No variants found in VCF file! Ending program...")
+            sys.exit()
+        else:
+            estimate_time(vcf)
         
         # need to break into chunks of 200 variants - maximum POST size is 200
         def divide_variants_list(list, n):
