@@ -21,6 +21,7 @@ TODO (5/16/23):
 from argparse import ArgumentParser, HelpFormatter
 import textwrap
 import sys
+import os.path
 import re
 from pysam import VariantFile
 import requests # verify=False set in requests to avoid errors when on VPN
@@ -160,7 +161,6 @@ def vep_output(variants, colnames):
 
     vep_results = pd.DataFrame(columns=colnames)
     
-    cnt = 0
     for i in decoded:
 
         var = i.get("input")
@@ -212,7 +212,7 @@ def vep_output(variants, colnames):
 
 def get_pdb_num(pdbid, spid, aanum):
     '''check for offset between Uniprot -> PDB residue number mapping
-    
+
     "P01116": {
         "identifier": "RASK_HUMAN", 
         "mappings": [
@@ -237,20 +237,22 @@ def get_pdb_num(pdbid, spid, aanum):
         "name": "RASK_HUMAN"
       }
     '''
+    if args.test:
+        print("\n\t\tChecking numbering offset between UniProt", spid, "and PDBID", pdbid, "...")
+        #print("\t\tpdb:", pdbid, "spid:", spid, "aanum:", aanum)
 
     pdb = pdbid.split("_")[0]
     chainid = pdbid.split("_")[1]
     pdb_url = "https://www.ebi.ac.uk/pdbe/api/mappings/uniprot_segments/" + pdb
     r = requests.get(pdb_url, verify=verify)
+    #print(r.json())
     if r.status_code == 200:
         uniprot_map = r.json()
     else:
         uniprot_map = "None"
-        
-    for id in uniprot_map:
-        if id.upper() == pdb:
-            mappings = uniprot_map[id]["UniProt"][spid]["mappings"]
-            if mappings[0]['chain_id'] == chainid:
+        return("None", "None")
+
+    '''
                 # from the RASK example above:
                 #
                 # unp_start = uniprot start #
@@ -271,23 +273,38 @@ def get_pdb_num(pdbid, spid, aanum):
                 #           = aanum - (unp_start - author_residue_number)
                 #    respos (for SIFT/PolyPhen in iCn3D) = 
                 #           aanum - (uniprot_start - residue_number)
+    '''        
+    for id in uniprot_map:
+        if id.upper() == pdb:
+            mappings = uniprot_map[id]["UniProt"][spid]["mappings"]
+            #mappings: [{'entity_id': 2, 'chain_id': 'E', 'struct_asym_id': 'C', 'start': {'author_residue_number': 6, 'author_insertion_code': '', 'residue_number': 1}, 'end': {'author_residue_number': 26, 'author_insertion_code': '', 'residue_number': 21}, 'unp_start': 111, 'unp_end': 131}]
+            for i in mappings:
+                if i['chain_id'] == chainid: 
+                    uniprot_start_num = i['unp_start']
+                    pdb_start_num = uniprot_start_num
 
-                uniprot_start_num = mappings[0]['unp_start']
-                pdb_start_num = uniprot_start_num
-                if mappings[0]['start']['author_residue_number'] != None:
-                    pdb_start_num = mappings[0]['start']['author_residue_number']
-                residue_position = mappings[0]['start']['residue_number']
-        
-                diff = int(uniprot_start_num) - int(pdb_start_num)
+                    if i['start']['author_residue_number'] != None:
+                        pdb_start_num = i['start']['author_residue_number']
+                    else:
+                        pdb_start_num = i['start']['residue_number']
+                    residue_position = i['start']['residue_number']
+                    #print("uniprot_start_num:", uniprot_start_num, "pdb_start_num:", pdb_start_num, "residue_position:", residue_position)
+                    
+                    diff = int(uniprot_start_num) - int(pdb_start_num)
 
-                pdbnum = int(aanum) - diff 
+                    pdbnum = int(aanum) - diff 
 
-                respos = int(aanum) - (uniprot_start_num - residue_position)
-                respos = int(respos)
+                    # residue position in sequence needed for iCn3D tracks
+                    respos = int(aanum) - (uniprot_start_num - residue_position)
+                    respos = int(respos)
 
-                return(pdbnum, respos)
+                    return(pdbnum, respos)
 
 def check_mutant(pdbid, chainid, pdbnum):
+
+    if args.test:
+        print("\t\tChecking if engineered mutant...")
+    
     ''' Determine if amino acid is an engineered mutant in PDB structure
 
         https://www.ebi.ac.uk/pdbe/api/pdb/entry/mutated_AA_or_NA/1bgj
@@ -330,13 +347,54 @@ def check_mutant(pdbid, chainid, pdbnum):
 
     return(mut)
 
+def check_observed(pdbid, chainid, pdbnum):
+
+    if args.test:
+        print("\t\tChecking if residue is observed in structure...")
+        #print("\t\t", pdbid, chainid, pdbnum)
+
+    obs = True
+
+    url = "https://www.ebi.ac.uk/pdbe/api/pdb/entry/residue_listing/" + pdbid + "/chain/" + chainid 
+    r = requests.get(url, verify=verify)
+    #print(r.json())
+    # {'3n56': {'molecules': [{'entity_id': 2, 'chains': [{'struct_asym_id': 'C', 'residues': 
+    # [{'residue_number': 1, 'residue_name': 'SER', 'author_residue_number': 1, 'author_insertion_code': '', 'observed_ratio': 1.0}
+    if r.status_code == 200:
+        res_dict = r.json()
+    else:
+        res_dict = "None"
+
+    # convert author_residue_number and observed_ratio to dictionary
+    res = [d.get('author_residue_number', None) for d in res_dict[pdbid]['molecules'][0]['chains'][0]['residues']]
+    obsval = [d.get('observed_ratio', None) for d in res_dict[pdbid]['molecules'][0]['chains'][0]['residues']]
+    resnum = dict(zip(res, obsval))
+
+    if int(pdbnum) in resnum:
+        if float(resnum[int(pdbnum)]) == 0.0:
+            obs = False
+    else:
+        if args.test:
+            print("\t\t\t", pdbnum, "not in list of residues, assuming numbering mismatch, setting obs to False.")
+        
+        obs = False
+
+    return(obs)
+
 def get_pdb_id(results):
+
+    if args.test:
+        print("\n\tget_pdb_id...")
+
     '''
     Retrieve the list of PDB IDs for each Uniprot ID
     For each amino acid position:
         1. identify if there is an x-ray or EM structure
         2. if so, get the PDB ID for the highest resolution structure
         3. if not, get the PDB ID of any NMR structures available
+        4. fix offset between UniProt and PDB numbering
+        5. check that residue appears in the experimental structure
+        6. check that the residue in question is not an engineered mutant 
     '''
 
     spid_list = list(set(results.SPID)) # unique set of SwissProt ids
@@ -362,18 +420,17 @@ def get_pdb_id(results):
                     maxres = 10
 
                     for j in pdbid_list[m]:
-                        # print('pdbid:', j['pdb_id'],'chain:',j['chain_id'],'resolution:',j['resolution'],'start:', j["unp_start"], 'end:', j['unp_end'])
+                        #print('pdbid:', j['pdb_id'],'chain:',j['chain_id']) #,'resolution:',j['resolution'],'start:', j["unp_start"], 'end:', j['unp_end'])
                         
                         # if n in range of pdb, use pdb id instead of uniprot id
                         if ((int(aanum) >= j['unp_start']) & (int(aanum) <= j['unp_end'])):
-
                             if j["resolution"] is None:
                                 res = 0
                             else:
                                 res = j["resolution"]
-                            
+
                             if (res == 0) & (maxres < 10):
-                                break # NMR, but already have xray
+                                continue # NMR, but already have xray
 
                             elif ((res == 0) & (maxres == 10) | (0 < res < maxres)):
                                 # either NMR and no xray, or xray with better resolution
@@ -381,20 +438,29 @@ def get_pdb_id(results):
 
                                 # account for offset between PDB and Uniprot numbering
                                 pdbid = j["pdb_id"].upper() + "_" + j["chain_id"]
-                                pdbnum, respos = get_pdb_num(pdbid, spid, aanum)
+                                num = get_pdb_num(pdbid, spid, aanum)
+                                pdbnum = num[0]
+                                respos = num[1]
+
+                                #print("\tpdbid:", pdbid, "spid:", spid, "aanum:", aanum, "pdbnum:", pdbnum, "residue position:", respos)
+
+                                # check if residue is observed in the structure                                
+                                if not check_observed(j["pdb_id"], j["chain_id"], pdbnum):
+                                    if args.test:
+                                        print("\t\t  -> Residue", aa, "doesn't appear in structure:", j['pdb_id'], j['chain_id'], "(pdbnum:", pdbnum, ")")
+                                    
+                                    continue
 
                                 # check if residue is an engineered mutant in PDB structure
-
-                                # testing: 
-                                # check_mut = check_mutant(j["pdb_id"], j["chain_id"], str(pdbnum))
-                                # print("check_mut:", check_mut, j["pdb_id"], j["chain_id"], str(pdbnum))
                                 if check_mutant(j["pdb_id"], j["chain_id"], str(pdbnum)):
-                                    print("PDB mutated:", j["pdb_id"])
-                                    break
+                                    if args.test:
+                                        print("PDB engineered mutation at", pdbnum, j["pdb_id"])
+                                    
+                                    continue
 
                                 results.loc[(results['SPID']==spid) & (results['mutaa']==aa),'PDBID'] = pdbid
                                 results.loc[(results['SPID']==spid) & (results['mutaa']==aa),'pdbnum'] = str(pdbnum)
-                                # only need this to make SIFT & PolyPhen tracks, delete before html/csv output
+                                # only need this to make SIFT & PolyPhen tracks, delete before html/csv output:
                                 results.loc[(results['SPID']==spid) & (results['mutaa']==aa),'respos'] = respos
 
                                 if res > 0:
@@ -424,7 +490,10 @@ def get_iCn3D_path(results):
     url_path='https://www.ncbi.nlm.nih.gov/Structure/icn3d/full.html?'
 
     for row in results.itertuples():
-        print("\nGetting URL for", row.SPID, end='')
+
+        if args.test:
+            print("\tGetting URL for", row.SPID, end='')
+
         iCn3Durl = "No structure for " + row.SPID
 
         sift_str = ''
@@ -437,7 +506,8 @@ def get_iCn3D_path(results):
         s = re.split(r'(\d+)', mutaa)  # need the number and new aa
 
         # check to see if we are using AlphaFold structure
-        if (row.PDBID == ''):
+        # print('row.PDBID:', row.PDBID)
+        if row.PDBID == '': # or row.PDBID == 'NA':
             # check length -> sequences > 2700 aa are not in AF predictions
             length_query = "https://rest.uniprot.org/uniprotkb/" + row.SPID + "?format=tsv&fields=length"
             r = requests.get(length_query, verify=verify).text
@@ -445,7 +515,9 @@ def get_iCn3D_path(results):
                 print(row.SPID, "length > 2700, no AlphaFold prediction")
                 continue
             else:
-                print(" (AlphaFold)")
+                if args.test:
+                    print(" (AlphaFold)")
+
                 if row.SIpred != '':
                     sift_str += s[1] + ' ' + s[2]
                 if row.PPpred != '':
@@ -461,7 +533,8 @@ def get_iCn3D_path(results):
                 url_command += '; scap interaction ' + scap_str
 
         else:
-            print(' (PDB)')
+            if args.test:
+                print(' (PDB', str(row.PDBID), ')')
 
             if row.SIpred != '':
                 sift_str += str(row.respos) + ' ' + s[2]
@@ -469,7 +542,7 @@ def get_iCn3D_path(results):
             if row.PPpred != '':
                 poly_str += str(row.respos) + ' ' + s[2]
 
-            scap_str += row.PDBID + "_" + str(row.pdbnum) + "_" + s[2] # e.g. 1HLZ_A_113_Y
+            scap_str += str(row.PDBID) + "_" + str(row.pdbnum) + "_" + s[2] # e.g. 1HLZ_A_113_Y
 
             url_query =  'pdbid=' + row.PDBID.split("_")[0] + '&date=' + date.strftime("%Y%m%d") + '&v=3.12.7&command='
 
@@ -533,7 +606,7 @@ def print_html(results):
         # limit output to 1000 rows by default
         n += 1
         if n > args.n:
-            print("HTML output limited to", str(args.n), "rows...")
+            print("\tHTML output limited to", str(args.n), "rows...")
             break
 
         iCn3Durl = "<a href=" + str(row.Link) + " target=\"_blank\">iCn3D link</a><br>"
@@ -641,15 +714,6 @@ def get_vcf():
 
     '''
     convert gene symbols to ensembl gene ids:
-    
-    server = "https://rest.ensembl.org"
-    ext = "/lookup/symbol/homo_sapiens"
-    headers={ "Content-Type" : "application/json", "Accept" : "application/json"}
-    r = requests.post(server+ext, headers=headers, data='{ "symbols" : ["BRCA2", "BRAF" ] }')
- 
-    if not r.ok:
-        r.raise_for_status()
-        sys.exit()
  
     decoded = r.json()
     print(repr(decoded))
@@ -839,6 +903,8 @@ def cli():
     parser.add_argument('--verifyfalse', action='store_false', 
                         help="If you are on a VPN and get error messages from the requests library, set the --verifyfalse flag")
 
+    parser.add_argument('--test', action='store_true', help="Perform testing functions") # default is false
+
     return parser
 
 def main():
@@ -854,88 +920,119 @@ def main():
     results.set_index('variant', inplace=True)
 
     def estimate_time(vcfdf):
+
+        print("\n################# Time to Complete Job Estimate #################")
+
         l = len(vcfdf)
         total_batches = l/200
-        time_per_batch = 10
-        mutations_per_batch = 12.5
-        max_batches = int(args.n/mutations_per_batch)
+        time_per_batch = 10 # seconds
+        mutations_per_batch = 12 # just an estimate 
+        max_batches = int(args.n/mutations_per_batch) # how many batches to get to n (default 1000)
 
         if total_batches > max_batches:
             max_batches = max_batches
         else:
             max_batches = total_batches
         
+        print("\tLength of vcf file:", l)
+        print("\tEstimated maximum number of batches:", max_batches)
+        
         vep_time = time_per_batch * max_batches
-        pdb_time = 180 * args.n/100
+        pdb_time = 10 * min(args.n, l)/10 # ~10% of variants require PDB calls
         time = vep_time + pdb_time
         time = int(time/60 + 1)
 
-        print("\nLength of vcf file:", l)
-        print("Estimated # of batches of 200 variants needed to get to", args.n, "mutations:", str(max_batches))
-        print("Estimated time at", str(time_per_batch), "seconds per batch if", 
+        # Length of vcf file: 14
+        # Estimated # of batches of 200 variants needed to get to 1000 mutations: 0.07
+        # Estimated time at 10 seconds per batch if 12.5 mutations per batch: 17 minutes
+
+        print("\tEstimated # of batches of 200 variants needed to get to", args.n, "mutations:", str(max_batches))
+        print("\tEstimated time at", str(time_per_batch), "seconds per batch if", 
               str(mutations_per_batch), "mutations per batch:", str(time), "minutes")
+        print("################# Time to Complete Job Estimate #################")
 
-    # Extract SIFT & PolyPhen scores from TCGA file
-    if args.t:
-        print("Getting VEP values from TCGA file...")
-        vcf, results = get_vcf_tcga(colnames) # returns vcf, results df
-        
-        if not vcf:
-            print("No variants found in VCF file! Ending program...")
-            sys.exit()
+    if args.test and os.path.exists("vep_results.csv"):
+        print("reading vep_results.csv...")
+        # variant	EnsID	Symbol	SPID	mutaa	PDBID	pdbnum	SIpred	SIscore	PPpred	PPscore	Link
+        # 1 943298 . C T .	ENSG00000187634	SAMD11	Q96NU1	P537L			tolerated	0.93	benign	0.009	
+        results = pd.read_csv("vep_results.csv", index_col='variant') 
+                                                 
+        results['EnsID'] = results['EnsID'].astype("string")
+        results['mutaa'] = results['mutaa'].astype("string")
+        results['PDBID'] = results['PDBID'].astype("string")
+        results['SIpred'] = results['SIpred'].astype("string")
+        results['PPpred'] = results['PPpred'].astype("string")
+        results['Link'] = results['Link'].astype("string")
+
+    else:
+
+        # Extract SIFT & PolyPhen scores from TCGA file
+        if args.t:
+            print("Getting VEP values from TCGA file...")
+            vcf, results = get_vcf_tcga(colnames)  # returns vcf, results df
+
+            if not vcf:
+                sys.exit("No variants found in VCF file! Ending program...")
+
+        # Get variants from VCF file, SIFT & PolyPhen from VEP REST API (default)
         else:
-            estimate_time(vcf)
+            # extract the variants from the vcf file
+            vcf = get_vcf()
+            if not vcf:
+                print("No variants found in VCF file! Ending program...")
+                sys.exit()
+            else:
+                estimate_time(vcf)
 
-        # find if mutations are in PDB structures or not
-        print("\nGetting PDB IDs...", end='')
-        get_pdb_id(results)
-        print("Done") 
+            # need to break into chunks of 200 variants - maximum POST size is 200
+            def divide_variants_list(list, n):
+                for i in range(0, len(list), n):
+                    yield list[i:i + n]
 
-    # Get variants from VCF file, SIFT & PolyPhen from VEP REST API (default)
-    else:    
-        # extract the variants from the vcf file
-        vcf = get_vcf()
-        if not vcf:
-            print("No variants found in VCF file! Ending program...")
-            sys.exit()
-        else:
-            estimate_time(vcf)
+            variant_list = list(divide_variants_list(vcf, 200))  # returns a list of lists
+
+            # combine all variants in a string to submit to VEP
+            print("\nSubmitting variants to VEP server (batch = 200 variants)...")
+            n = 0
+            for v in variant_list:
+                n += 1
+                print("\tprocessing batch", n, "...")
+                variants = ''
+                for c in v:
+                    loc = " ".join(c)
+                    variants += "\"" + loc + "\" ,"
+                variants = variants[:-1]
+
+                vep_result = []
+                vep_result = vep_output(variants, colnames)
+
+                results = pd.concat([results, vep_result])
+
+                if len(results) >= args.n:
+                    print("Stopping after", str(args.n), "missense mutations...")
+                    break
+
+                time.sleep(2)  # avoid taxing server
+            print("Done")
+
+            if args.test:
+                results.to_csv("vep_results.csv")
         
-        # need to break into chunks of 200 variants - maximum POST size is 200
-        def divide_variants_list(list, n):
-            for i in range(0, len(list), n):
-                yield list[i:i + n]
+        # end if args.t (TCGA)
 
-        variant_list = list(divide_variants_list(vcf, 200)) # returns a list of lists
+    # end if args.test and os.path.exists("vep_results.csv"):
 
-        # combine all variants in a string to submit to VEP
-        print("\nSubmitting variants to VEP server (batch = 200 variants)...")
-        n = 0
-        for v in variant_list:
-            n += 1
-            print("processing batch", n)
-            variants = ''
-            for c in v:
-                loc = " ".join(c) 
-                variants += "\"" + loc + "\" ," 
-            variants = variants[:-1]
-            vep_result = vep_output(variants, colnames)
+    if args.test:
+        results['PDBID'].fillna('',inplace=True) # need when testing and reading from .csv file
+        results['SIpred'].fillna('',inplace=True) # need when testing and reading from .csv file
+        results['PPpred'].fillna('',inplace=True) # need when testing and reading from .csv file
 
-            results = pd.concat([results, vep_result])
+    # find if mutations are in PDB structures or not
+    print("\nGetting PDB IDs...")
+    print("\tChecking numbering offset, if residue is observed in structure, if residue is an engineered mutant...")
 
-            if len(results) >= args.n:
-                print("Stopping after", str(args.n), "missense mutations...")
-                break
-
-            time.sleep(2) # avoid taxing server
-        print("Done")
-    
-        # find if mutations are in PDB structures or not
-        print("\nGetting PDB IDs...", end='')
-        get_pdb_id(results)
-        print("Done") 
-
-    # end if args.t
+    get_pdb_id(results)
+    print("Done") 
 
     print("\nGenerating iCn3D URLs...")
     get_iCn3D_path(results)
@@ -944,11 +1041,11 @@ def main():
     results = results.drop(columns=['respos'])
 
     # generate an html page with results dataframe, iCn3D links
-    print("\nPrinting html file...")
+    print("Writing html file...")
     print_html(results)  
 
     # generate a .csv file with results dataframe, iCn3D links
-    print("Printing .csv file...")
+    print("Writing .csv file...")
     print_csv(results)  
 
 if __name__ == '__main__':   
