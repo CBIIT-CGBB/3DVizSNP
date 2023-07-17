@@ -915,7 +915,7 @@ def main():
 
     # set up results dataframe
     colnames = ["variant", "EnsID", "Symbol", "SPID", "mutaa", "PDBID", "pdbnum", 
-                "SIpred", "SIscore", "PPpred", "PPscore", "Link"]
+                "SIpred", "SIscore", "PPpred", "PPscore", "Link", "respos"]
     results = pd.DataFrame(columns=colnames)
     results.set_index('variant', inplace=True)
 
@@ -979,8 +979,7 @@ def main():
             # extract the variants from the vcf file
             vcf = get_vcf()
             if not vcf:
-                print("No variants found in VCF file! Ending program...")
-                sys.exit()
+                sys.exit("No variants found in VCF file! Ending program...")
             else:
                 estimate_time(vcf)
 
@@ -1023,7 +1022,7 @@ def main():
     # end if args.test and os.path.exists("vep_results.csv"):
 
     if args.test:
-        results['PDBID'].fillna('',inplace=True) # need when testing and reading from .csv file
+        results['PDBID'].fillna('',inplace=True)  # need when testing and reading from .csv file
         results['SIpred'].fillna('',inplace=True) # need when testing and reading from .csv file
         results['PPpred'].fillna('',inplace=True) # need when testing and reading from .csv file
 
@@ -1037,7 +1036,7 @@ def main():
     print("\nGenerating iCn3D URLs...")
     get_iCn3D_path(results)
 
-    # get rid of residue # (only need to make SIFT & PolyPhen tracks, don't want it in output table)
+    # get rid of residue position (only need to make SIFT & PolyPhen tracks, don't want it in output table)
     results = results.drop(columns=['respos'])
 
     # generate an html page with results dataframe, iCn3D links
