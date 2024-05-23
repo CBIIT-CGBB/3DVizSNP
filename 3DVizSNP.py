@@ -299,6 +299,9 @@ def get_pdb_num(pdbid, spid, aanum):
                     respos = int(respos)
 
                     return(pdbnum, respos)
+    
+    return("None", "None") # if didn't match pdbid or chain_id 
+
 
 def check_mutant(pdbid, chainid, pdbnum):
 
@@ -439,6 +442,8 @@ def get_pdb_id(results):
                                 # account for offset between PDB and Uniprot numbering
                                 pdbid = j["pdb_id"].upper() + "_" + j["chain_id"]
                                 num = get_pdb_num(pdbid, spid, aanum)
+                                if (num is None or "None" in num):
+                                    continue
                                 pdbnum = num[0]
                                 respos = num[1]
 
